@@ -73,8 +73,79 @@ class ApiKeyModel(Base):
     name: Mapped[str] = mapped_column(String(120))
     key_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     prefix: Mapped[str] = mapped_column(String(16))
+    # The scopes the plan granted when this key was minted (migration 0034).
+    # JSONB rather than ARRAY(String) to match how every other list-shaped
+    # column in this schema is stored, and so a scope can grow structure later
+    # without a type change.
+    scopes: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    plan_tier: Mapped[str] = mapped_column(String(20), default="free", server_default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class SubscriptionModel(Base):
+    """One row per paying tenant (migration 0034). A tenant with no row is on
+    the free tier — see `Subscription.free()`."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    tier: Mapped[str] = mapped_column(String(20), default="free", server_default="free")
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class BillingTransactionModel(Base):
+    """Append-only billing history (migration 0034)."""
+
+    __tablename__ = "billing_transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    amount_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    plan_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ApiUsageDailyModel(Base):
+    """API calls made with a key, bucketed by day (migration 0034).
+
+    Per day rather than per request: the monthly allowance is the only thing
+    this number feeds, and one row per call would make the metering table the
+    largest in the database to answer a question that is a SUM over 30 rows.
+    """
+
+    __tablename__ = "api_usage_daily"
+    __table_args__ = (UniqueConstraint("tenant_id", "day", name="uq_api_usage_tenant_day"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    day: Mapped[date] = mapped_column(Date, index=True)
+    calls: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class TenantInviteModel(Base):

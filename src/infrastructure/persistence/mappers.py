@@ -16,6 +16,12 @@ from src.application.ports.repositories import (
     WhatsAppConversation,
     WhatsAppConversationNote,
 )
+from src.domain.billing.entities import (
+    BillingTransaction,
+    PlanTier,
+    Subscription,
+    SubscriptionStatus,
+)
 from src.domain.broadcast.entities import Broadcast, BroadcastRecipient
 from src.domain.chat.entities import ChatSession, Citation, Message, MessageRole
 from src.domain.chatbot.entities import (
@@ -81,7 +87,46 @@ def apikey_to_domain(row: m.ApiKeyModel) -> ApiKey:
         name=row.name,
         key_hash=row.key_hash,
         prefix=row.prefix,
+        # `or []` covers rows written before 0034 added the column.
+        scopes=list(row.scopes or []),
+        plan_tier=row.plan_tier or "free",
         is_active=row.is_active,
+        last_used_at=row.last_used_at,
+        revoked_at=row.revoked_at,
+        created_at=row.created_at,
+    )
+
+
+def subscription_to_domain(row: m.SubscriptionModel) -> Subscription:
+    return Subscription(
+        id=row.id,
+        tenant_id=TenantId(row.tenant_id),
+        # Coerced through the enums so an unrecognised value from the database
+        # cannot become an entitlement the code never intended.
+        tier=PlanTier(row.tier) if row.tier in set(PlanTier) else PlanTier.FREE,
+        status=(
+            SubscriptionStatus(row.status)
+            if row.status in set(SubscriptionStatus)
+            else SubscriptionStatus.ACTIVE
+        ),
+        started_at=row.started_at,
+        current_period_end=row.current_period_end,
+        auto_renew=row.auto_renew,
+        canceled_at=row.canceled_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def billing_transaction_to_domain(row: m.BillingTransactionModel) -> BillingTransaction:
+    return BillingTransaction(
+        id=row.id,
+        tenant_id=TenantId(row.tenant_id),
+        kind=row.kind,
+        amount_usd=row.amount_usd,
+        description=row.description,
+        plan_tier=row.plan_tier,
+        reference=row.reference,
         created_at=row.created_at,
     )
 

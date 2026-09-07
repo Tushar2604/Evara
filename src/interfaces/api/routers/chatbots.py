@@ -9,6 +9,7 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
+from src.application.use_cases.billing import ensure_can_create_assistant
 from src.application.use_cases.booking_setup import EnsureBookingSetup
 from src.application.use_cases.generate_assistant import (
     USE_CASE_HINTS,
@@ -170,6 +171,7 @@ async def generate_chatbot(
 
     async with container.unit_of_work() as uow:
         uow.set_tenant_scope(principal.tenant_id)
+        await ensure_can_create_assistant(uow, principal.tenant_id)
         await uow.chatbots.add(bot)
         await uow.commit()
     return _to_response(bot, ai_generated=blueprint.ai_generated)
@@ -225,6 +227,7 @@ async def generate_chatbot_stream(
 
         async with container.unit_of_work() as uow:
             uow.set_tenant_scope(principal.tenant_id)
+            await ensure_can_create_assistant(uow, principal.tenant_id)
             await uow.chatbots.add(bot)
             await uow.commit()
 
@@ -287,6 +290,7 @@ async def create_chatbot(
         bot.set_raw_prompt(body.system_prompt)
     async with container.unit_of_work() as uow:
         uow.set_tenant_scope(principal.tenant_id)
+        await ensure_can_create_assistant(uow, principal.tenant_id)
         await uow.chatbots.add(bot)
         await uow.commit()
     return _to_response(bot)

@@ -34,6 +34,8 @@ import AnalyticsPage      from "./pages/AnalyticsPage";
 import SettingsPage       from "./pages/SettingsPage";
 import HiringAgentPage    from "./pages/HiringAgentPage";
 import TeamPage           from "./pages/TeamPage";
+import BillingPage        from "./pages/BillingPage";
+import ApiKeysPage        from "./pages/ApiKeysPage";
 import AcceptInvitePage   from "./pages/AcceptInvitePage";
 import AppointmentsCalendarPage from "./pages/AppointmentsCalendarPage";
 import AppointmentsPage  from "./pages/AppointmentsPage";
@@ -118,6 +120,10 @@ export default function App() {
                 <Route path="/broadcasts/:id" element={<BroadcastDetailPage />} />
                 <Route path="/hiring-agent" element={<HiringAgentPage />}  />
                 <Route path="/team"       element={<TeamPage />}           />
+                {/* Account-level, so admin-gated like /team: a key is full
+                    tenant scope and a plan change is a charge. */}
+                <Route path="/billing"    element={<BillingPage />}        />
+                <Route path="/api-keys"   element={<ApiKeysPage />}        />
                 <Route path="/settings"   element={<SettingsPage />}       />
                 <Route path="/appointments/services"     element={<ServicesPage />} />
                 <Route path="/appointments/resources"    element={<ResourcesPage />} />

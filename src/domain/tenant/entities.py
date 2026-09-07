@@ -51,12 +51,30 @@ class User:
 
 @dataclass
 class ApiKey:
-    """A programmatic key scoped to a tenant. We store only the hash."""
+    """A programmatic key scoped to a tenant. We store only the hash.
+
+    `scopes` and `plan_tier` record what the *plan* granted at the moment the
+    key was minted. They are not the authority on what the key may do today —
+    `src/domain/billing/entities.py` explains why, and `deps.py` intersects
+    these with the live plan on every request — but they are what the customer
+    sees in the dashboard, and they are how a key issued under Scale is
+    recognisable as an agent key after a downgrade.
+    """
 
     tenant_id: TenantId
     name: str
     key_hash: str
     prefix: str  # first chars, shown in UI to identify the key
     id: uuid.UUID = field(default_factory=new_id)
+    scopes: list[str] = field(default_factory=list)
+    plan_tier: str = "free"
     is_active: bool = True
+    # Touched (coarsely — see the repository) so a customer can tell a key that
+    # is carrying traffic from one they can safely delete.
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def revoke(self) -> None:
+        self.is_active = False
+        self.revoked_at = datetime.now(UTC)

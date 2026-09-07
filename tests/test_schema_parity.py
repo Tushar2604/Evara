@@ -33,6 +33,12 @@ NEW_TABLES = {
     # Extended by 0022/0024/0026 long after 0009 created it — exactly the
     # shape of drift this file exists to catch.
     "whatsapp_conversations": m.WhatsAppConversationModel,
+    # Billing (0034). The plan is what gates assistants and API keys, so a
+    # column that exists only on the model here means a 500 the first time
+    # somebody opens the Billing page in production.
+    "subscriptions": m.SubscriptionModel,
+    "billing_transactions": m.BillingTransactionModel,
+    "api_usage_daily": m.ApiUsageDailyModel,
 }
 
 
@@ -43,6 +49,7 @@ NEW_TABLES = {
 DDL_RANGES = (
     ("0008_interviews", "0013_broadcasts"),
     ("0014_tighten_default_prompt", "0026_whatsapp_crm_inbox"),
+    ("0033_onboarding_prefs", "0034_billing_and_api_scopes"),
 )
 
 

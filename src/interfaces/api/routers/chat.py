@@ -31,7 +31,7 @@ from src.domain.shared.identifiers import ChatbotId, SessionId
 from src.infrastructure.rag.graph import RagGraph, build_context
 
 log = structlog.get_logger(__name__)
-from src.interfaces.api.deps import ContainerDep, PrincipalDep
+from src.interfaces.api.deps import ContainerDep, PrincipalDep, RunAgentPrincipalDep
 from src.interfaces.api.schemas import (
     AnswerResponse,
     AskRequest,
@@ -65,7 +65,7 @@ async def create_session(
 async def ask(
     session_id: uuid.UUID,
     body: AskRequest,
-    principal: PrincipalDep,
+    principal: RunAgentPrincipalDep,
     container: ContainerDep,
 ) -> AnswerResponse:
     # An assistant with appointments enabled answers through the front-office
@@ -197,7 +197,7 @@ def _agent_stream(container, principal, session_id: uuid.UUID, body: AskRequest,
 async def ask_stream(
     session_id: uuid.UUID,
     body: AskRequest,
-    principal: PrincipalDep,
+    principal: RunAgentPrincipalDep,
     container: ContainerDep,
 ) -> EventSourceResponse:
     """Token-by-token SSE. Retrieval runs first (citations sent up front), then

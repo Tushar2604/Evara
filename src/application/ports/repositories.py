@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
+from src.domain.billing.entities import BillingTransaction, Subscription
 from src.domain.broadcast.entities import Broadcast, BroadcastRecipient
 from src.domain.chat.entities import ChatSession, Message
 from src.domain.chatbot.entities import Chatbot
@@ -63,6 +64,18 @@ class TenantRepository(Protocol):
     async def add(self, tenant: Tenant) -> None: ...
     async def get(self, tenant_id: TenantId) -> Tenant | None: ...
     async def get_by_slug(self, slug: str) -> Tenant | None: ...
+    async def set_limits(
+        self, tenant_id: TenantId, *, daily_token_quota: int, max_documents: int
+    ) -> None:
+        """Apply a plan's ceilings to the tenant row.
+
+        The token quota and document ceiling were already columns on
+        `tenants`, and the ingestion and answering paths already read them.
+        Rather than teach every one of those call sites about plans, a plan
+        change writes its numbers here — so the limits a customer is sold
+        are the same ones the request path enforces, with no second
+        implementation to drift."""
+        ...
 
 
 @runtime_checkable
@@ -78,7 +91,36 @@ class UserRepository(Protocol):
 class ApiKeyRepository(Protocol):
     async def add(self, key: ApiKey) -> None: ...
     async def get_by_hash(self, key_hash: str) -> ApiKey | None: ...
+    async def get(self, tenant_id: TenantId, key_id: uuid.UUID) -> ApiKey | None: ...
     async def list_for_tenant(self, tenant_id: TenantId) -> list[ApiKey]: ...
+    async def revoke(self, tenant_id: TenantId, key_id: uuid.UUID) -> bool: ...
+    async def touch(self, key_id: uuid.UUID) -> None: ...
+
+
+@runtime_checkable
+class SubscriptionRepository(Protocol):
+    """The tenant's plan. `get` returns None for a workspace that has never
+    paid — callers resolve that to `Subscription.free(tenant_id)` rather than
+    the repository inventing a row (see the entity's docstring)."""
+
+    async def get(self, tenant_id: TenantId) -> Subscription | None: ...
+    async def upsert(self, subscription: Subscription) -> None: ...
+
+
+@runtime_checkable
+class BillingTransactionRepository(Protocol):
+    async def add(self, transaction: BillingTransaction) -> None: ...
+    async def list_for_tenant(
+        self, tenant_id: TenantId, limit: int = 50
+    ) -> list[BillingTransaction]: ...
+
+
+@runtime_checkable
+class ApiUsageRepository(Protocol):
+    """The meter behind a plan's monthly API allowance."""
+
+    async def record_call(self, tenant_id: TenantId) -> None: ...
+    async def calls_since(self, tenant_id: TenantId, since: date) -> int: ...
 
 
 def generate_invite_token() -> str:
@@ -1095,6 +1137,9 @@ class UnitOfWork(Protocol):
     tenants: TenantRepository
     users: UserRepository
     api_keys: ApiKeyRepository
+    subscriptions: SubscriptionRepository
+    billing_transactions: BillingTransactionRepository
+    api_usage: ApiUsageRepository
     documents: DocumentRepository
     chunks: ChunkRepository
     chatbots: ChatbotRepository

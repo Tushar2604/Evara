@@ -8,7 +8,7 @@ cosine distance computed inside Postgres — no separate vector service.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -26,6 +26,7 @@ from src.application.ports.repositories import (
     WhatsAppConversation,
     WhatsAppConversationNote,
 )
+from src.domain.billing.entities import BillingTransaction, Subscription
 from src.domain.broadcast.entities import Broadcast, BroadcastRecipient
 from src.domain.chat.entities import ChatSession, Message
 from src.domain.chatbot.entities import Chatbot
@@ -45,6 +46,7 @@ from src.domain.shared.identifiers import (
     SessionId,
     TenantId,
     UserId,
+    new_id,
 )
 from src.domain.shared.phone import canonical_phone, phone_digits
 from src.domain.support.entities import IssueReport
@@ -81,6 +83,15 @@ class TenantRepositoryImpl:
             await self._s.execute(select(m.TenantModel).where(m.TenantModel.slug == slug))
         ).scalar_one_or_none()
         return map_.tenant_to_domain(row) if row else None
+
+    async def set_limits(
+        self, tenant_id: TenantId, *, daily_token_quota: int, max_documents: int
+    ) -> None:
+        await self._s.execute(
+            update(m.TenantModel)
+            .where(m.TenantModel.id == tenant_id)
+            .values(daily_token_quota=daily_token_quota, max_documents=max_documents)
+        )
 
 
 class UserRepositoryImpl:
@@ -142,7 +153,11 @@ class ApiKeyRepositoryImpl:
                 name=key.name,
                 key_hash=key.key_hash,
                 prefix=key.prefix,
+                scopes=list(key.scopes),
+                plan_tier=key.plan_tier,
                 is_active=key.is_active,
+                last_used_at=key.last_used_at,
+                revoked_at=key.revoked_at,
                 created_at=key.created_at,
             )
         )
@@ -157,13 +172,177 @@ class ApiKeyRepositoryImpl:
         ).scalar_one_or_none()
         return map_.apikey_to_domain(row) if row else None
 
+    async def get(self, tenant_id: TenantId, key_id: uuid.UUID) -> ApiKey | None:
+        row = (
+            await self._s.execute(
+                select(m.ApiKeyModel).where(
+                    m.ApiKeyModel.id == key_id, m.ApiKeyModel.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        return map_.apikey_to_domain(row) if row else None
+
     async def list_for_tenant(self, tenant_id: TenantId) -> list[ApiKey]:
         rows = (
             await self._s.execute(
-                select(m.ApiKeyModel).where(m.ApiKeyModel.tenant_id == tenant_id)
+                select(m.ApiKeyModel)
+                .where(m.ApiKeyModel.tenant_id == tenant_id)
+                .order_by(m.ApiKeyModel.created_at.desc())
             )
         ).scalars()
         return [map_.apikey_to_domain(r) for r in rows]
+
+    async def revoke(self, tenant_id: TenantId, key_id: uuid.UUID) -> bool:
+        """Deactivate rather than delete.
+
+        A deleted key leaves no answer to "what was calling us last Tuesday",
+        and the row is four columns wide. Revocation is what the customer means
+        by "delete" and it is immediate: `get_by_hash` only ever returns active
+        keys.
+        """
+        result = await self._s.execute(
+            update(m.ApiKeyModel)
+            .where(
+                m.ApiKeyModel.id == key_id,
+                m.ApiKeyModel.tenant_id == tenant_id,
+                m.ApiKeyModel.is_active.is_(True),
+            )
+            .values(is_active=False, revoked_at=datetime.now(UTC))
+        )
+        return bool(result.rowcount)
+
+    async def touch(self, key_id: uuid.UUID) -> None:
+        """Record that the key was used, to the minute.
+
+        Rounded down so a key under sustained load writes one row per minute
+        instead of one per request: this column exists to tell a live key from a
+        dead one in the dashboard, and second-level precision would cost a write
+        on the hot path to answer a question nobody asks.
+        """
+        now = datetime.now(UTC).replace(second=0, microsecond=0)
+        await self._s.execute(
+            update(m.ApiKeyModel)
+            .where(
+                m.ApiKeyModel.id == key_id,
+                or_(
+                    m.ApiKeyModel.last_used_at.is_(None),
+                    m.ApiKeyModel.last_used_at < now,
+                ),
+            )
+            .values(last_used_at=now)
+        )
+
+
+class SubscriptionRepositoryImpl:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get(self, tenant_id: TenantId) -> Subscription | None:
+        row = (
+            await self._s.execute(
+                select(m.SubscriptionModel).where(m.SubscriptionModel.tenant_id == tenant_id)
+            )
+        ).scalar_one_or_none()
+        return map_.subscription_to_domain(row) if row else None
+
+    async def upsert(self, subscription: Subscription) -> None:
+        row = (
+            await self._s.execute(
+                select(m.SubscriptionModel).where(
+                    m.SubscriptionModel.tenant_id == subscription.tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            self._s.add(
+                m.SubscriptionModel(
+                    id=subscription.id,
+                    tenant_id=subscription.tenant_id,
+                    tier=subscription.tier.value,
+                    status=subscription.status.value,
+                    started_at=subscription.started_at,
+                    current_period_end=subscription.current_period_end,
+                    auto_renew=subscription.auto_renew,
+                    canceled_at=subscription.canceled_at,
+                    created_at=subscription.created_at,
+                    updated_at=subscription.updated_at,
+                )
+            )
+            return
+        row.tier = subscription.tier.value
+        row.status = subscription.status.value
+        row.started_at = subscription.started_at
+        row.current_period_end = subscription.current_period_end
+        row.auto_renew = subscription.auto_renew
+        row.canceled_at = subscription.canceled_at
+        row.updated_at = subscription.updated_at
+
+
+class BillingTransactionRepositoryImpl:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(self, transaction: BillingTransaction) -> None:
+        self._s.add(
+            m.BillingTransactionModel(
+                id=transaction.id,
+                tenant_id=transaction.tenant_id,
+                kind=transaction.kind,
+                amount_usd=transaction.amount_usd,
+                description=transaction.description,
+                plan_tier=transaction.plan_tier,
+                reference=transaction.reference,
+                created_at=transaction.created_at,
+            )
+        )
+
+    async def list_for_tenant(
+        self, tenant_id: TenantId, limit: int = 50
+    ) -> list[BillingTransaction]:
+        rows = (
+            await self._s.execute(
+                select(m.BillingTransactionModel)
+                .where(m.BillingTransactionModel.tenant_id == tenant_id)
+                .order_by(m.BillingTransactionModel.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars()
+        return [map_.billing_transaction_to_domain(r) for r in rows]
+
+
+class ApiUsageRepositoryImpl:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_call(self, tenant_id: TenantId) -> None:
+        """Increment today's counter.
+
+        An upsert with `ON CONFLICT DO UPDATE` rather than read-then-write:
+        several API requests for the same tenant land in the same second
+        routinely, and the read-modify-write version loses calls under exactly
+        the load where the meter starts to matter.
+        """
+        today = datetime.now(UTC).date()
+        stmt = (
+            pg_insert(m.ApiUsageDailyModel)
+            .values(id=new_id(), tenant_id=tenant_id, day=today, calls=1)
+            .on_conflict_do_update(
+                constraint="uq_api_usage_tenant_day",
+                set_={"calls": m.ApiUsageDailyModel.calls + 1},
+            )
+        )
+        await self._s.execute(stmt)
+
+    async def calls_since(self, tenant_id: TenantId, since: date) -> int:
+        total = (
+            await self._s.execute(
+                select(func.coalesce(func.sum(m.ApiUsageDailyModel.calls), 0)).where(
+                    m.ApiUsageDailyModel.tenant_id == tenant_id,
+                    m.ApiUsageDailyModel.day >= since,
+                )
+            )
+        ).scalar_one()
+        return int(total or 0)
 
 
 class TenantInviteRepositoryImpl:

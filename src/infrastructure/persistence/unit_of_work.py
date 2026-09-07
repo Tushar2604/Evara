@@ -19,7 +19,9 @@ from src.infrastructure.persistence.database import get_sessionmaker
 from src.infrastructure.persistence.repositories import (
     AnalyticsRepositoryImpl,
     ApiKeyRepositoryImpl,
+    ApiUsageRepositoryImpl,
     BatchCandidateRepositoryImpl,
+    BillingTransactionRepositoryImpl,
     BroadcastRecipientRepositoryImpl,
     BroadcastRepositoryImpl,
     ChatbotRepositoryImpl,
@@ -35,6 +37,7 @@ from src.infrastructure.persistence.repositories import (
     PostCallConfigRepositoryImpl,
     PostCallDeliveryRepositoryImpl,
     RequestLogRepositoryImpl,
+    SubscriptionRepositoryImpl,
     TenantIntegrationRepositoryImpl,
     TenantInviteRepositoryImpl,
     TenantRepositoryImpl,
@@ -88,6 +91,9 @@ class SqlAlchemyUnitOfWork:
         self.tenants = TenantRepositoryImpl(s)
         self.users = UserRepositoryImpl(s)
         self.api_keys = ApiKeyRepositoryImpl(s)
+        self.subscriptions = SubscriptionRepositoryImpl(s)
+        self.billing_transactions = BillingTransactionRepositoryImpl(s)
+        self.api_usage = ApiUsageRepositoryImpl(s)
         self.documents = DocumentRepositoryImpl(s)
         self.chunks = ChunkRepositoryImpl(s)
         self.chatbots = ChatbotRepositoryImpl(s)

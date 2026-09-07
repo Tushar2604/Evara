@@ -34,10 +34,12 @@ from src.interfaces.api.middleware import ObservabilityMiddleware, PublicCorsMid
 from src.interfaces.api.routers import (
     agent,
     analytics,
+    api_keys,
     appointments,
     auth,
     auth_google,
     availability,
+    billing,
     broadcasts,
     candidates,
     chat,
@@ -391,6 +393,8 @@ def create_app() -> FastAPI:
     app.include_router(interviews.router, prefix=api_prefix)
     app.include_router(interview_batches.router, prefix=api_prefix)
     app.include_router(team.router, prefix=api_prefix)
+    app.include_router(billing.router, prefix=api_prefix)
+    app.include_router(api_keys.router, prefix=api_prefix)
     app.include_router(integrations.router, prefix=api_prefix)
     app.include_router(whatsapp.router, prefix=api_prefix)
     # Shares the /chatbots prefix with `chatbots` — registered after it so the

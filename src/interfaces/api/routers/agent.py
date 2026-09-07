@@ -14,17 +14,21 @@ from fastapi import APIRouter
 from src.application.dtos import AgentAskInput
 from src.application.use_cases.run_agent import RunAgent
 from src.domain.shared.identifiers import SessionId
-from src.interfaces.api.deps import ContainerDep, PrincipalDep
+from src.interfaces.api.deps import ContainerDep, RunAgentPrincipalDep
 from src.interfaces.api.schemas import AgentAnswerResponse, AgentStepResponse, CitationResponse
 
 router = APIRouter(tags=["agent"])
+
+# Every route here spends model tokens on the caller's behalf, so an API key
+# needs `agent.run` — the Scale ($15/mo) scope. Signed-in dashboard users are
+# unaffected; see `require_scope`.
 
 
 @router.post("/sessions/{session_id}/agent", response_model=AgentAnswerResponse)
 async def ask_agent(
     session_id: uuid.UUID,
     body: AgentAskInput,
-    principal: PrincipalDep,
+    principal: RunAgentPrincipalDep,
     container: ContainerDep,
 ) -> AgentAnswerResponse:
     use_case = RunAgent(

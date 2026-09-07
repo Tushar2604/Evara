@@ -1773,3 +1773,112 @@ class OnboardingPrefsUpdate(BaseModel):
     # The one destructive option, and the only way back from "I dismissed
     # everything": clears dismissals and tour history so the guidance returns.
     reset: bool = False
+
+
+# --- Billing & API access ---
+# The wire shape of the plan catalogue and what a workspace has used against
+# it. `max_assistants: null` and `assistants_remaining: null` both mean
+# unlimited — the headline of every paid tier — and the frontend renders them
+# as the word, not as a missing number.
+PlanTierName = Literal["free", "starter", "growth", "scale"]
+
+
+class PlanSchema(BaseModel):
+    tier: PlanTierName
+    name: str
+    price_usd: float
+    tagline: str
+    max_assistants: int | None
+    max_documents: int
+    daily_token_quota: int
+    monthly_api_calls: int
+    scopes: list[str]
+    api_access: bool
+    agent_api: bool
+
+
+class PlanUsageSchema(BaseModel):
+    assistants_used: int
+    assistants_remaining: int | None
+    documents_used: int
+    tokens_used_today: int
+    api_calls_this_period: int
+    api_calls_remaining: int
+
+
+class SubscriptionSchema(BaseModel):
+    tier: PlanTierName
+    status: str
+    started_at: datetime
+    current_period_end: datetime | None
+    auto_renew: bool
+    canceled_at: datetime | None
+
+
+class BillingOverviewResponse(BaseModel):
+    """One request behind the whole Billing page: what they're on, what it
+    grants, what they've used, and the catalogue to compare against."""
+
+    subscription: SubscriptionSchema
+    plan: PlanSchema
+    usage: PlanUsageSchema
+    available_plans: list[PlanSchema]
+
+
+class ChangePlanRequest(BaseModel):
+    tier: PlanTierName
+    # The payment-processor charge id, once one exists. Accepted now so the
+    # billing history has somewhere to put it without a schema change.
+    reference: str | None = None
+
+
+class BillingTransactionResponse(BaseModel):
+    id: uuid.UUID
+    kind: str
+    amount_usd: float
+    description: str
+    plan_tier: str | None
+    reference: str | None
+    created_at: datetime
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    # Omitted = every scope the plan grants, which is what "Create key" means.
+    # Naming scopes explicitly is for callers who want a narrower key.
+    scopes: list[str] | None = None
+
+
+class ApiKeyResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    # The first characters of the key, so a row is identifiable without the
+    # secret ever being retrievable again.
+    prefix: str
+    scopes: list[str]
+    # What the key can do *today* — its scopes intersected with the live plan.
+    # Differs from `scopes` after a downgrade, and that difference is the point.
+    active_scopes: list[str]
+    plan_tier: str
+    is_active: bool
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class CreatedApiKeyResponse(BaseModel):
+    """The one and only response that carries the raw key. It is not stored in
+    a form we can read back, so this is the customer's single chance to copy
+    it — the UI says so, loudly."""
+
+    key: ApiKeyResponse
+    raw_key: str
+
+
+class ApiKeyListResponse(BaseModel):
+    keys: list[ApiKeyResponse]
+    plan_tier: str
+    # Whether this workspace may mint a key at all. Lets the page render the
+    # upgrade prompt instead of a button that would 403.
+    api_access: bool
+    agent_api: bool
+    available_scopes: list[str]

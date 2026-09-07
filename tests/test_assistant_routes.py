@@ -18,9 +18,11 @@ from fastapi.testclient import TestClient
 from src.application.ports.repositories import OAuthConnection
 from src.application.ports.services import LLMResult
 from src.config.container import get_container
+from src.domain.billing.entities import PlanTier, Subscription
 from src.domain.chatbot.entities import Chatbot
 from src.domain.document.entities import Document, IngestionStatus
 from src.domain.shared.identifiers import ChatbotId, DocumentId, TenantId
+from src.domain.tenant.entities import Tenant
 from src.infrastructure.oauth.providers import OAuthBroker
 from src.interfaces.api.app import create_app
 from src.interfaces.api.deps import Principal, container_dep, current_principal
@@ -73,6 +75,36 @@ class FakeEmptyRepo:
         return []
 
 
+class FakeSubscriptionRepo:
+    """The workspace's plan. Growth by default, so these tests exercise the
+    unlimited-assistant path rather than tripping the free tier's ceiling of
+    one — the ceiling itself has its own tests in `test_billing.py`."""
+
+    def __init__(self, tier: PlanTier = PlanTier.GROWTH) -> None:
+        self.subscription = Subscription(tenant_id=TENANT_ID, tier=tier)
+        self.subscription.change_to(tier)
+
+    async def get(self, tenant_id: TenantId) -> Subscription | None:
+        return self.subscription
+
+    async def upsert(self, subscription: Subscription) -> None:
+        self.subscription = subscription
+
+
+class FakeTenantRepo:
+    def __init__(self) -> None:
+        self.tenant = Tenant(name="Acme", slug="acme", id=TENANT_ID)
+
+    async def get(self, tenant_id: TenantId) -> Tenant | None:
+        return self.tenant
+
+    async def set_limits(
+        self, tenant_id: TenantId, *, daily_token_quota: int, max_documents: int
+    ) -> None:
+        self.tenant.daily_token_quota = daily_token_quota
+        self.tenant.max_documents = max_documents
+
+
 class FakeUnitOfWork:
     def __init__(self, chatbots: FakeChatbotRepo, documents: FakeDocumentRepo) -> None:
         self.chatbots = chatbots
@@ -80,6 +112,9 @@ class FakeUnitOfWork:
         self.post_call_configs = FakeEmptyRepo()
         self.tenant_integrations = FakeEmptyRepo()
         self.oauth_connections = FakeEmptyRepo()
+        # Creating an assistant now consults the plan (migration 0034).
+        self.subscriptions = FakeSubscriptionRepo()
+        self.tenants = FakeTenantRepo()
         self.committed = 0
 
     def set_tenant_scope(self, tenant_id: TenantId) -> None:

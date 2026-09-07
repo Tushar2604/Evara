@@ -29,7 +29,7 @@ import {
   ListChecks, LayoutDashboard, PhoneOutgoing, MessageCircle, UserSearch,
   CalendarDays, CalendarCheck, Briefcase, MapPin, Clock,
   PanelLeftDashed, PanelLeftClose, PanelLeftOpen,
-  ChevronDown, Lock, Eye,
+  ChevronDown, Lock, Eye, CreditCard, KeyRound,
 } from "lucide-react";
 import { useAuth } from "../store/auth";
 import { useTheme } from "../store/theme";
@@ -177,6 +177,11 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/home", label: "Overview", icon: ListChecks, exact: true },
       { to: "/hiring-agent", label: "Hiring Agent", icon: Radio, adminOnly: true, unlockedAt: "operate" },
+      // Never gated by stage: someone on the free tier who has hit the
+      // one-assistant ceiling needs Billing on their first day, not after
+      // they have earned their way to `operate`.
+      { to: "/billing", label: "Billing", icon: CreditCard, adminOnly: true },
+      { to: "/api-keys", label: "API", icon: KeyRound, adminOnly: true },
       { to: "/team", label: "Team", icon: Users2, adminOnly: true },
       { to: "/report-issue", label: "Report Issue", icon: LifeBuoy },
     ],
