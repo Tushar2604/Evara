@@ -279,13 +279,23 @@ app.get("/sessions", (_req, res) => {
  * own across restarts. Without this, a redeploy or a free-tier sleep would
  * leave every linked account silently dead until someone re-scanned.
  */
+// Each session start pulls a full history sync (sessions.js: syncFullHistory)
+// into this process's memory. Kicking every linked account off at once on a
+// redeploy — which this used to do, with no await between them — spikes CPU
+// and memory right as the Python API in the same container is also cold-
+// starting, on a Render instance sized for one thing running hard at a time,
+// not several. Staggering costs nothing (accounts were already dead since
+// the last restart) and keeps the herd from arriving together.
+const _RESUME_STAGGER_MS = 2000;
+
 async function resumeLinkedSessions() {
   try {
     const { rows } = await pool.query(
       `SELECT id FROM whatsapp_web_sessions
        WHERE status IN ('linked', 'disconnected') AND linked_at IS NOT NULL`,
     );
-    for (const row of rows) {
+    for (const [i, row] of rows.entries()) {
+      if (i > 0) await sleep(_RESUME_STAGGER_MS);
       manager.start(row.id).catch((err) =>
         log.warn({ sessionId: row.id, err: err.message }, "resume failed"),
       );
@@ -294,6 +304,10 @@ async function resumeLinkedSessions() {
   } catch (err) {
     log.error({ err: err.message }, "could not resume sessions");
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const server = app.listen(PORT, HOST, async () => {

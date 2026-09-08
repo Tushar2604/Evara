@@ -39,6 +39,14 @@ class IngestDocument:
         self._llm = llm
 
     async def execute(self, tenant_id: TenantId, document_id: DocumentId) -> None:
+        # IMPORTANT: no DB connection is held across the parse/describe-image/
+        # embedding calls below. Free-tier Postgres caps connections
+        # aggressively, and a single large document can spend minutes in
+        # parsing + embedding — holding a pooled connection for that whole
+        # span would starve ordinary chat/API traffic of the same pool. Each
+        # step below opens its own short transaction (see `_save`), mirroring
+        # `AskChatbot`. This also means progress genuinely survives a
+        # mid-pipeline restart, matching this module's docstring.
         async with self._uow as uow:
             uow.set_tenant_scope(tenant_id)
             doc = await uow.documents.get(tenant_id, document_id)
@@ -49,24 +57,33 @@ class IngestDocument:
                 # PENDING means upload not completed yet; READY means done.
                 return
 
-            try:
-                await self._run_pipeline(uow, doc)
-            except Exception as exc:  # noqa: BLE001 - convert to domain failure state
-                log.exception("ingest.failed", document_id=str(document_id))
-                doc.mark_failed(str(exc)[:500])
+        try:
+            await self._run_pipeline(tenant_id, doc)
+        except Exception as exc:  # noqa: BLE001 - convert to domain failure state
+            log.exception("ingest.failed", document_id=str(document_id))
+            doc.mark_failed(str(exc)[:500])
+            async with self._uow as uow:
+                uow.set_tenant_scope(tenant_id)
                 await uow.documents.update(doc)
                 uow.collect_event(
                     DocumentIngestionFailed(
                         tenant_id=tenant_id, document_id=doc.id, reason=str(exc)[:500]
                     )
                 )
+                await uow.commit()
+
+    async def _save(self, tenant_id: TenantId, doc: Document) -> None:
+        """Persist the document's current state in its own short transaction."""
+        async with self._uow as uow:
+            uow.set_tenant_scope(tenant_id)
+            await uow.documents.update(doc)
             await uow.commit()
 
-    async def _run_pipeline(self, uow: UnitOfWork, doc: Document) -> None:
+    async def _run_pipeline(self, tenant_id: TenantId, doc: Document) -> None:
         # 1. PARSE
         if doc.status == IngestionStatus.UPLOADED:
             doc.transition_to(IngestionStatus.PARSING)
-            await uow.documents.update(doc)
+            await self._save(tenant_id, doc)
         raw = await self._storage.get_bytes(doc.storage_key)
         if doc.content_type.startswith("image/"):
             # No OCR dependency in this stack — a vision-capable LLM
@@ -78,7 +95,7 @@ class IngestDocument:
 
         # 2. CHUNK
         doc.transition_to(IngestionStatus.CHUNKING)
-        await uow.documents.update(doc)
+        await self._save(tenant_id, doc)
         pieces = self._chunker.chunk(text)
         if not pieces:
             raise ValueError("No extractable text found in document.")
@@ -96,21 +113,30 @@ class IngestDocument:
 
         # 3. EMBED + UPSERT (replace any partial prior run to stay idempotent)
         doc.transition_to(IngestionStatus.EMBEDDING)
-        await uow.documents.update(doc)
-        await uow.chunks.delete_for_document(doc.tenant_id, doc.id)
+        await self._save(tenant_id, doc)
+        async with self._uow as uow:
+            uow.set_tenant_scope(tenant_id)
+            await uow.chunks.delete_for_document(doc.tenant_id, doc.id)
+            await uow.commit()
         for start in range(0, len(chunks), _EMBED_BATCH):
             batch = chunks[start : start + _EMBED_BATCH]
             vectors = await self._embedder.embed_documents([c.text for c in batch])
-            await uow.chunks.add_many(batch, vectors)
+            async with self._uow as uow:
+                uow.set_tenant_scope(tenant_id)
+                await uow.chunks.add_many(batch, vectors)
+                await uow.commit()
 
         # 4. FINALIZE
         doc.mark_ready(chunk_count=len(chunks))
-        await uow.documents.update(doc)
-        uow.collect_event(
-            DocumentIngested(
-                tenant_id=doc.tenant_id, document_id=doc.id, chunk_count=len(chunks)
+        async with self._uow as uow:
+            uow.set_tenant_scope(tenant_id)
+            await uow.documents.update(doc)
+            uow.collect_event(
+                DocumentIngested(
+                    tenant_id=doc.tenant_id, document_id=doc.id, chunk_count=len(chunks)
+                )
             )
-        )
+            await uow.commit()
         log.info("ingest.ready", document_id=str(doc.id), chunks=len(chunks))
 
 

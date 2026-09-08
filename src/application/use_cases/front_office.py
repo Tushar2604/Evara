@@ -98,7 +98,11 @@ class AskFrontOffice:
             if used >= tenant.daily_token_quota:
                 raise QuotaExceededError("Daily token quota exceeded. Try again tomorrow.")
 
-            prior = await uow.chats.list_messages(tenant_id, session_id)
+            # Only the tail ever gets used (below), so fetch just that instead
+            # of the whole thread — see the identical note in ask_chatbot.py.
+            prior = await uow.chats.list_messages(
+                tenant_id, session_id, limit=MAX_HISTORY_MESSAGES
+            )
             # "customer", not the default "candidate": this agent books
             # appointments, and a transcript that calls the other person a
             # candidate tells the model, every turn, that it is running a job

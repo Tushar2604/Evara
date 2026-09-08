@@ -12,11 +12,24 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.application.ports.repositories import GoogleOAuthConnection
 from src.config.settings import Settings
+from src.infrastructure.http_client import get_client
+from src.infrastructure.llm.resilience import is_transient
+
+# Retries only a blip (dropped connection, 503, timeout) — never a permanent
+# failure like a revoked grant or bad request, which a blanket retry used to
+# hit 3 times with up to ~10s of backoff apiece before finally raising. This
+# call runs inline in the booking/scheduling request path, so that cost was
+# paid by the user waiting on the response, not just by the failing call.
+_calendar_retry = retry(
+    retry=retry_if_exception(is_transient),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=1, max=10),
+    reraise=True,
+)
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -50,46 +63,46 @@ class GoogleCalendarClient:
         }
         return f"{_AUTH_URL}?{urlencode(params)}"
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @_calendar_retry
     async def exchange_code(self, code: str) -> dict:
         """One-time authorization-code exchange. Returns the raw token
         response (access_token, refresh_token, expires_in, scope)."""
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                _TOKEN_URL,
-                data={
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": self._redirect_uri,
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
+        client = await get_client("google_calendar", timeout=15)
+        resp = await client.post(
+            _TOKEN_URL,
+            data={
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": self._redirect_uri,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     async def fetch_email(self, access_token: str) -> str:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                _USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
-            )
-            resp.raise_for_status()
-            return resp.json().get("email", "")
+        client = await get_client("google_calendar", timeout=15)
+        resp = await client.get(
+            _USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
+        )
+        resp.raise_for_status()
+        return resp.json().get("email", "")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @_calendar_retry
     async def _refresh(self, connection: GoogleOAuthConnection) -> GoogleOAuthConnection:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                _TOKEN_URL,
-                data={
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret,
-                    "refresh_token": connection.refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = await get_client("google_calendar", timeout=15)
+        resp = await client.post(
+            _TOKEN_URL,
+            data={
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "refresh_token": connection.refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
         connection.access_token = data["access_token"]
         connection.expires_at = datetime.now(UTC) + timedelta(seconds=data.get("expires_in", 3600))
         return connection
@@ -102,7 +115,7 @@ class GoogleCalendarClient:
             return await self._refresh(connection)
         return connection
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @_calendar_retry
     async def create_event(
         self,
         connection: GoogleOAuthConnection,
@@ -123,13 +136,13 @@ class GoogleCalendarClient:
             "end": {"dateTime": end_time.isoformat()},
             "attendees": [{"email": attendee_email}],
         }
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                _CALENDAR_EVENTS_URL,
-                json=body,
-                params={"sendUpdates": "all"},
-                headers={"Authorization": f"Bearer {connection.access_token}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = await get_client("google_calendar", timeout=15)
+        resp = await client.post(
+            _CALENDAR_EVENTS_URL,
+            json=body,
+            params={"sendUpdates": "all"},
+            headers={"Authorization": f"Bearer {connection.access_token}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
         return data["id"], data.get("htmlLink", "")

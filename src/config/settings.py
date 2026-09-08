@@ -116,6 +116,14 @@ class Settings(BaseSettings):
     # Ceiling on concurrent embedding calls. Embeddings run on every retrieval,
     # so this is the busiest external dependency in the chat path.
     embedding_max_concurrency: int = 8
+    # Hard ceiling on a single call to a generation provider's SDK. Without
+    # this the OpenAI/Groq/Gemini clients fall back to their own defaults
+    # (minutes, not seconds), and under WEB_CONCURRENCY=1 a single slow
+    # provider call ties up a request — and one of only
+    # `llm_max_concurrency_per_provider` bulkhead slots — far longer than the
+    # failover chain is meant to tolerate. `is_transient` already treats a
+    # timeout as failover-worthy, so this just makes that trigger promptly.
+    llm_request_timeout_seconds: float = 30.0
     # Ceiling on WhatsApp auto-replies generated at once. Each reply is a full
     # RAG pipeline — embed, retrieve (holding a database connection), generate —
     # and inbound messages arrive in bursts: a campaign to 500 contacts can

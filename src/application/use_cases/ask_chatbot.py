@@ -109,7 +109,13 @@ class AskChatbot:
 
             # Fetched BEFORE the current message is added, so it reflects prior
             # turns only — the current message is passed separately as `data.message`.
-            prior = await uow.chats.list_messages(tenant_id, session_id)
+            # Limited to the tail: both `format_message_history` and
+            # `count_repeat_asks` only ever look at the last `_HISTORY_TURNS`
+            # (12) messages, so a long-lived WhatsApp thread was paying to
+            # fetch and format its entire history on every single turn for no
+            # benefit — growing latency and DB-connection hold time as the
+            # conversation aged. 20 leaves headroom over that constant.
+            prior = await uow.chats.list_messages(tenant_id, session_id, limit=20)
             history_text = format_message_history(prior)
             # Counted here, on the turns that came BEFORE this message, so a
             # candidate circling back to the same unanswered question gets a

@@ -79,13 +79,16 @@ class OpenAIProvider:
         self._temperature = settings.llm_temperature
         self._api_key = settings.openai_api_key
         self._base_url = settings.openai_base_url or None
+        self._timeout = settings.llm_request_timeout_seconds
         self._client = None
 
     def _ensure(self):  # type: ignore[no-untyped-def]
         if self._client is None:
             from openai import AsyncOpenAI
 
-            self._client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
+            self._client = AsyncOpenAI(
+                api_key=self._api_key, base_url=self._base_url, timeout=self._timeout
+            )
         return self._client
 
     @_provider_retry
@@ -152,13 +155,14 @@ class GroqProvider:
         self._model = settings.groq_model
         self._temperature = settings.llm_temperature
         self._api_key = settings.groq_api_key
+        self._timeout = settings.llm_request_timeout_seconds
         self._client = None
 
     def _ensure(self):  # type: ignore[no-untyped-def]
         if self._client is None:
             from groq import AsyncGroq
 
-            self._client = AsyncGroq(api_key=self._api_key)
+            self._client = AsyncGroq(api_key=self._api_key, timeout=self._timeout)
         return self._client
 
     @_provider_retry
@@ -208,13 +212,18 @@ class GeminiProvider:
         self._model = settings.gemini_model
         self._temperature = settings.llm_temperature
         self._api_key = settings.gemini_api_key
+        self._timeout_ms = int(settings.llm_request_timeout_seconds * 1000)
         self._configured = False
 
     def _ensure(self):  # type: ignore[no-untyped-def]
         if not self._configured:
             from google import genai
+            from google.genai import types
 
-            self._client = genai.Client(api_key=self._api_key)
+            self._client = genai.Client(
+                api_key=self._api_key,
+                http_options=types.HttpOptions(timeout=self._timeout_ms),
+            )
             self._configured = True
         return self._client
 

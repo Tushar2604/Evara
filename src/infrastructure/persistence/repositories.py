@@ -529,35 +529,32 @@ class ChunkRepositoryImpl:
         document_ids: list[DocumentId] | None = None,
         min_score: float = 0.0,
     ) -> list[tuple[Chunk, float]]:
-        import math
-
-        stmt = select(m.ChunkModel).where(m.ChunkModel.tenant_id == tenant_id)
+        # Scored and ranked by Postgres itself via the HNSW index on
+        # `embedding` (migration 0035), not fetched-and-scored in Python.
+        # `<=>` is pgvector's cosine *distance*; `1 - that` is the cosine
+        # *similarity* the rest of the app already scores and thresholds on,
+        # so `min_score`/`top_k` mean exactly what they meant before this
+        # became a DB-side query. Previously this method loaded every chunk
+        # row for the tenant on every retrieval — the dominant cost of a chat
+        # turn once a tenant has more than a handful of documents.
+        similarity = (1 - m.ChunkModel.embedding.cosine_distance(query_embedding)).label(
+            "similarity"
+        )
+        stmt = (
+            select(m.ChunkModel, similarity)
+            .where(m.ChunkModel.tenant_id == tenant_id, m.ChunkModel.embedding.is_not(None))
+        )
         # `None` and `[]` mean different things and must not be collapsed:
         # None = unscoped (search the whole tenant), [] = an assistant with an
         # empty knowledge base, which must retrieve nothing rather than
         # everything. `IN ()` yields no rows, which is exactly right.
         if document_ids is not None:
             stmt = stmt.where(m.ChunkModel.document_id.in_(document_ids))
+        stmt = stmt.where(similarity >= min_score).order_by(similarity.desc()).limit(top_k)
 
-        rows = (await self._s.execute(stmt)).scalars().all()
-
-        def _cosine(a: list[float], b: list[float]) -> float:
-            dot = sum(x * y for x, y in zip(a, b))
-            mag = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(x * x for x in b))
-            return dot / mag if mag else 0.0
-
-        scored = [
-            (row, _cosine(query_embedding, row.embedding))
-            for row in rows
-            if row.embedding
-        ]
-        scored.sort(key=lambda t: t[1], reverse=True)
-
-        results: list[tuple[Chunk, float]] = []
-        for row, sim in scored[:top_k]:
-            if sim < min_score:
-                continue
-            results.append((
+        rows = (await self._s.execute(stmt)).all()
+        return [
+            (
                 Chunk(
                     id=str(row.id),
                     tenant_id=TenantId(row.tenant_id),
@@ -567,8 +564,9 @@ class ChunkRepositoryImpl:
                     token_estimate=row.token_estimate,
                 ),
                 sim,
-            ))
-        return results
+            )
+            for row, sim in rows
+        ]
 
 
 class ChatbotRepositoryImpl:

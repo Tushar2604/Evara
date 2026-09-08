@@ -30,6 +30,7 @@ from src.domain.chatbot.entities import (
     default_flow_sections,
 )
 from src.domain.shared.identifiers import ChatbotId, DocumentId, new_id
+from src.infrastructure.persistence.unit_of_work import shielded
 from src.interfaces.api.deps import ContainerDep, PrincipalDep
 from src.interfaces.api.schemas import (
     AssistantConfigSchema,
@@ -225,7 +226,10 @@ async def generate_chatbot_stream(
         )
         bot.apply_flow_sections(blueprint.sections)
 
-        async with container.unit_of_work() as uow:
+        # Shielded — see the note in routers/chat.py's stream handler. A user
+        # navigating away right as generation finishes must not abort the
+        # save (or leak the connection doing it).
+        async with shielded(), container.unit_of_work() as uow:
             uow.set_tenant_scope(principal.tenant_id)
             await ensure_can_create_assistant(uow, principal.tenant_id)
             await uow.chatbots.add(bot)

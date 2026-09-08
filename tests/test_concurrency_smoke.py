@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 
+import anyio
 import httpx
 import pytest
 from src.infrastructure.http_client import close_clients, get_client
 from src.infrastructure.llm.embeddings import GeminiEmbedder
+from src.infrastructure.persistence.unit_of_work import shielded
 
 
 class _Settings:
@@ -149,3 +151,48 @@ async def test_embedding_order_survives_concurrency() -> None:
         await stub.aclose()
 
     assert [v[0] for v in vectors] == [float(len(t)) for t in texts]
+
+
+@pytest.mark.asyncio
+async def test_shielded_block_finishes_despite_outer_cancellation() -> None:
+    """The regression this guards: an SSE client disconnecting mid-stream
+    cancels the generator's task via an anyio cancel scope. If that lands
+    inside an unshielded `async with unit_of_work()`, the session's own
+    close is cancelled too and the pooled asyncpg connection is abandoned
+    for the garbage collector to find (see routers/chat.py's `_log` and
+    post-stream persist blocks). `shielded()` must let a "durable write"
+    block run to completion even when its enclosing task is cancelled."""
+    finished = False
+
+    async def durable_write() -> None:
+        nonlocal finished
+        async with shielded():
+            await asyncio.sleep(0.05)
+            finished = True
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(durable_write)
+        await asyncio.sleep(0)  # let durable_write start and enter the shield
+        tg.cancel_scope.cancel()
+
+    assert finished, "a shielded write must complete even if its caller is cancelled"
+
+
+@pytest.mark.asyncio
+async def test_unshielded_block_is_the_regression_shielded_prevents() -> None:
+    """Sanity check for the test above: without the shield, the same
+    cancellation cuts the block off before it finishes — confirming the
+    fixture actually exercises cancellation, not just a no-op scope."""
+    finished = False
+
+    async def unprotected_write() -> None:
+        nonlocal finished
+        await asyncio.sleep(0.05)
+        finished = True
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(unprotected_write)
+        await asyncio.sleep(0)  # let unprotected_write start, matching the test above
+        tg.cancel_scope.cancel()
+
+    assert not finished, "expected the unshielded write to be cut off by cancellation"

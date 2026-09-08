@@ -36,6 +36,7 @@ from src.domain.chatbot.entities import (
 )
 from src.domain.safety.guardrails import build_grounded_prompt, language_rules
 from src.domain.shared.identifiers import SessionId
+from src.infrastructure.persistence.unit_of_work import shielded
 from src.infrastructure.rag.graph import RagGraph, build_context
 from src.interfaces.api.deps import ContainerDep
 from src.interfaces.api.routers.chat import _as_chunks
@@ -285,7 +286,7 @@ async def ask_public_stream(
 
     async def _log(**fields) -> None:  # type: ignore[no-untyped-def]
         try:
-            async with container.unit_of_work() as uow:
+            async with shielded(), container.unit_of_work() as uow:
                 uow.set_tenant_scope(bot.tenant_id)
                 await uow.request_logs.add(
                     RequestLog(
@@ -355,7 +356,8 @@ async def ask_public_stream(
             tokens_used=tokens_used,
             provider=served_by.get("provider"),
         )
-        async with container.unit_of_work() as uow:
+        # Shielded — see the identical note in routers/chat.py's stream handler.
+        async with shielded(), container.unit_of_work() as uow:
             uow.set_tenant_scope(bot.tenant_id)
             await uow.chats.add_message(assistant)
             await uow.usage.add_tokens(bot.tenant_id, tokens_used)
@@ -440,7 +442,7 @@ async def greet_public(
             tokens_used=tokens_used,
             provider=served_by.get("provider"),
         )
-        async with container.unit_of_work() as uow:
+        async with shielded(), container.unit_of_work() as uow:  # see chat_stream's note
             uow.set_tenant_scope(bot.tenant_id)
             await uow.chats.add_message(assistant)
             await uow.usage.add_tokens(bot.tenant_id, tokens_used)

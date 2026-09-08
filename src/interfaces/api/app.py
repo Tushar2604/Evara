@@ -168,30 +168,23 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Exercise the failover chain once, so a retired model name is a loud line
     # in the boot log rather than a surprise during the outage it exists to
     # absorb. Three trivial completions; skipped with LLM_PROBE_ON_STARTUP=false.
+    #
+    # Backgrounded, not awaited: this used to run before `yield`, which meant
+    # uvicorn's own "Waiting for application startup" (and therefore Render's
+    # health check, and the WhatsApp bridge sidecar's first attempt to reach
+    # this same process) all stalled behind three sequential provider calls —
+    # each with its own retry/backoff — on every cold start. A provider being
+    # rate-limited or briefly unreachable right at boot (which happens; it is
+    # exactly what this probe is checking for) could add real seconds to
+    # becoming ready for no benefit, since the probe's only job is logging.
+    llm_probe: asyncio.Task | None = None
     if settings.llm_probe_on_startup:
-        try:
-            probe = await container.llm.probe()
-            dead = [n for n, r in probe.items() if not r.get("ok")]
-            for name in dead:
-                log.error(
-                    "llm.provider_unreachable",
-                    provider=name,
-                    model=probe[name].get("model"),
-                    error=probe[name].get("error"),
-                )
-            log.info(
-                "llm.chain_probed",
-                chain=list(probe),
-                healthy=[n for n in probe if n not in dead],
-                dead=dead,
-            )
-        except Exception:  # noqa: BLE001 - a diagnostic must never block startup
-            log.exception("llm.probe_failed")
+        llm_probe = asyncio.create_task(_probe_llm_chain(container))
 
     log.info("app.started", env=settings.app_env)
     yield
 
-    for task in (follow_ups, hold_expiry, reminders):
+    for task in (follow_ups, hold_expiry, reminders, llm_probe):
         if task is None:
             continue
         task.cancel()
@@ -260,6 +253,32 @@ async def _sweep_lease(key: int = _FOLLOW_UP_LOCK_KEY):  # type: ignore[no-untyp
                 )
     finally:
         await conn.close()
+
+
+async def _probe_llm_chain(container) -> None:  # type: ignore[no-untyped-def]
+    """One-shot background diagnostic: call every generation provider once and
+    log which ones answered. See the call site in `lifespan` for why this
+    must never be awaited before startup completes."""
+    try:
+        probe = await container.llm.probe()
+        dead = [n for n, r in probe.items() if not r.get("ok")]
+        for name in dead:
+            log.error(
+                "llm.provider_unreachable",
+                provider=name,
+                model=probe[name].get("model"),
+                error=probe[name].get("error"),
+            )
+        log.info(
+            "llm.chain_probed",
+            chain=list(probe),
+            healthy=[n for n in probe if n not in dead],
+            dead=dead,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - a diagnostic must never crash the process
+        log.exception("llm.probe_failed")
 
 
 async def _follow_up_loop(settings) -> None:

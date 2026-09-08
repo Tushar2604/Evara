@@ -16,6 +16,7 @@ import httpx
 import structlog
 
 from src.config.settings import Settings
+from src.infrastructure.http_client import get_client
 
 log = structlog.get_logger(__name__)
 
@@ -66,13 +67,13 @@ class ElevenLabsVoiceCloner:
             data["description"] = description
 
         try:
-            async with httpx.AsyncClient(timeout=CLONE_TIMEOUT_SECONDS) as client:
-                resp = await client.post(
-                    f"{_API_BASE}/voices/add",
-                    headers=self._headers(),
-                    data=data,
-                    files=files,
-                )
+            client = await get_client("elevenlabs_clone", timeout=CLONE_TIMEOUT_SECONDS)
+            resp = await client.post(
+                f"{_API_BASE}/voices/add",
+                headers=self._headers(),
+                data=data,
+                files=files,
+            )
         except httpx.HTTPError as exc:
             log.warning("voice.clone_error", error=str(exc))
             return False, "", f"Could not reach the voice provider: {exc}"
@@ -98,12 +99,12 @@ class ElevenLabsVoiceCloner:
             return False, b"", "This voice isn't ready yet."
 
         try:
-            async with httpx.AsyncClient(timeout=SYNTH_TIMEOUT_SECONDS) as client:
-                resp = await client.post(
-                    f"{_API_BASE}/text-to-speech/{voice_id}",
-                    headers={**self._headers(), "Accept": "audio/mpeg"},
-                    json={"text": text, "model_id": self._model},
-                )
+            client = await get_client("elevenlabs_synth", timeout=SYNTH_TIMEOUT_SECONDS)
+            resp = await client.post(
+                f"{_API_BASE}/text-to-speech/{voice_id}",
+                headers={**self._headers(), "Accept": "audio/mpeg"},
+                json={"text": text, "model_id": self._model},
+            )
         except httpx.HTTPError as exc:
             log.warning("voice.synth_error", error=str(exc))
             return False, b"", f"Could not reach the voice provider: {exc}"
@@ -122,8 +123,8 @@ class ElevenLabsVoiceCloner:
         if not self.enabled or not voice_id:
             return
         try:
-            async with httpx.AsyncClient(timeout=SYNTH_TIMEOUT_SECONDS) as client:
-                await client.delete(f"{_API_BASE}/voices/{voice_id}", headers=self._headers())
+            client = await get_client("elevenlabs_synth", timeout=SYNTH_TIMEOUT_SECONDS)
+            await client.delete(f"{_API_BASE}/voices/{voice_id}", headers=self._headers())
         except httpx.HTTPError as exc:  # noqa: BLE001
             log.warning("voice.delete_error", voice_id=voice_id, error=str(exc))
 

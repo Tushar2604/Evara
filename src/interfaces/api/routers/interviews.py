@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
@@ -20,6 +21,7 @@ from src.domain.interview.entities import INTERVIEWER_SYSTEM_PROMPT, Interview, 
 from src.domain.interview.prompts import build_interview_turn_prompt, format_transcript
 from src.domain.safety.guardrails import GUARD_REFUSAL, scan_input
 from src.domain.shared.identifiers import DocumentId, InterviewId
+from src.infrastructure.persistence.unit_of_work import shielded
 from src.interfaces.api.deps import AdminPrincipalDep, ContainerDep
 from src.interfaces.api.schemas import (
     AskRequest,
@@ -214,7 +216,8 @@ async def interview_greeting(access_token: str, request: Request, container: Con
         interview.status = "in_progress"
         interview.transcript.append(TranscriptTurn(role="assistant", content=answer_text))
 
-        async with container.unit_of_work() as uow:
+        # Shielded — see the note in routers/chat.py's stream handler.
+        async with shielded(), container.unit_of_work() as uow:
             uow.set_tenant_scope(interview.tenant_id)
             await uow.interviews.update(interview)
             await uow.usage.add_tokens(interview.tenant_id, tokens_used)
@@ -246,7 +249,7 @@ async def interview_respond(
 
         if not input_verdict.allowed:
             yield {"event": "token", "data": GUARD_REFUSAL}
-            async with container.unit_of_work() as uow:
+            async with shielded(), container.unit_of_work() as uow:
                 uow.set_tenant_scope(interview.tenant_id)
                 await uow.interviews.update(interview)
                 await uow.commit()
@@ -284,7 +287,8 @@ async def interview_respond(
         interview.transcript.append(TranscriptTurn(role="assistant", content=answer_text))
         tokens_used = max(1, (len(INTERVIEWER_SYSTEM_PROMPT) + len(prompt) + len(answer_text)) // 4)
 
-        async with container.unit_of_work() as uow:
+        # Shielded — see the note in routers/chat.py's stream handler.
+        async with shielded(), container.unit_of_work() as uow:
             uow.set_tenant_scope(interview.tenant_id)
             await uow.interviews.update(interview)
             await uow.usage.add_tokens(interview.tenant_id, tokens_used)
@@ -292,8 +296,14 @@ async def interview_respond(
 
         completed_now = False
         if not has_next:
-            finalize = FinalizeInterview(container.unit_of_work(), container.llm, container.storage)
-            await finalize.execute(interview.tenant_id, interview)
+            # Also shielded: this is the interview's finalize/report step, not
+            # merely a log — losing it to a disconnect right on the last turn
+            # would leave a completed interview stuck looking "in progress".
+            with anyio.CancelScope(shield=True):
+                finalize = FinalizeInterview(
+                    container.unit_of_work(), container.llm, container.storage
+                )
+                await finalize.execute(interview.tenant_id, interview)
             completed_now = True
 
         yield {

@@ -10,7 +10,9 @@ Isolation model:
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 
+import anyio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -57,6 +59,28 @@ from src.infrastructure.persistence.scheduling_repositories import (
     ResourceRepositoryImpl,
     ServiceRepositoryImpl,
 )
+
+
+@asynccontextmanager
+async def shielded():  # type: ignore[no-untyped-def]
+    """Protects a durable write from an outer cancellation.
+
+    `sse_starlette` actively cancels its generator's task the moment the
+    client disconnects — normal and desirable for the token-streaming part of
+    a request, but a DB write that starts *after* the last streamed token
+    (persisting the finished answer, usage, a request log) must not be caught
+    by the same cancellation. A user closing the tab mid-answer is routine,
+    and without this guard the cancellation can land inside
+    `unit_of_work().__aexit__`, aborting the session's own close before the
+    asyncpg connection is checked back into the pool — it is then only
+    reclaimed later by the garbage collector, which is how a stream of
+    ordinary tab-closes slowly starves a small connection pool.
+
+    Use as `async with shielded(), container.unit_of_work() as uow: ...`
+    around any commit inside an SSE `event_generator`.
+    """
+    with anyio.CancelScope(shield=True):
+        yield
 
 
 class SqlAlchemyUnitOfWork:

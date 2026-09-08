@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     Date,
     DateTime,
@@ -199,7 +199,7 @@ class ChunkModel(Base):
     ordinal: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
     token_estimate: Mapped[int] = mapped_column(Integer, default=0)
-    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
     document: Mapped[DocumentModel] = relationship(back_populates="chunks")
 
