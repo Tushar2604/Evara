@@ -43,6 +43,7 @@ import ServicesPage      from "./pages/ServicesPage";
 import ResourcesPage     from "./pages/ResourcesPage";
 import LocationsPage     from "./pages/LocationsPage";
 import AvailabilityPage  from "./pages/AvailabilityPage";
+import PlatformAdminPage from "./pages/PlatformAdminPage";
 
 export default function App() {
   return (
@@ -129,6 +130,12 @@ export default function App() {
                 <Route path="/appointments/resources"    element={<ResourcesPage />} />
                 <Route path="/appointments/locations"    element={<LocationsPage />} />
                 <Route path="/appointments/availability" element={<AvailabilityPage />} />
+              </Route>
+
+              {/* Super Admin: platform-wide, independent of the tenant-scoped
+                  admin block above — gated on `isPlatformAdmin`, not `role`. */}
+              <Route element={<ProtectedRoute requirePlatformAdmin />}>
+                <Route path="/platform-admin" element={<PlatformAdminPage />} />
               </Route>
 
               {/* Legacy redirects so old bookmarks keep working */}

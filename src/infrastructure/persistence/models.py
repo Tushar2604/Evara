@@ -60,6 +60,12 @@ class UserModel(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="owner")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Platform-wide role, orthogonal to the tenant-scoped `role` above. Grants
+    # cross-tenant visibility in the Super Admin panel — see migration 0036.
+    is_platform_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

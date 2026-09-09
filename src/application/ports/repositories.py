@@ -77,6 +77,8 @@ class TenantRepository(Protocol):
         implementation to drift."""
         ...
 
+    async def set_active(self, tenant_id: TenantId, is_active: bool) -> None: ...
+
 
 @runtime_checkable
 class UserRepository(Protocol):
@@ -85,6 +87,9 @@ class UserRepository(Protocol):
     async def get_by_email(self, email: str) -> User | None: ...
     async def set_password_hash(self, user_id: UserId, password_hash: str) -> None: ...
     async def list_for_tenant(self, tenant_id: TenantId) -> list[User]: ...
+    async def touch_login(self, user_id: UserId, when: datetime) -> None: ...
+    async def set_active(self, user_id: UserId, is_active: bool) -> None: ...
+    async def set_platform_admin(self, user_id: UserId, is_platform_admin: bool) -> None: ...
 
 
 @runtime_checkable
@@ -301,6 +306,82 @@ class AnalyticsRepository(Protocol):
     async def chatbot_provider_mix(
         self, tenant_id: TenantId, chatbot_id: ChatbotId, since: datetime
     ) -> list[ProviderStat]: ...
+
+
+@dataclass
+class TenantOverview:
+    """One row of the Super Admin tenants table — counts and rates only, never
+    message content (see `PlatformAdminRepository`'s docstring)."""
+
+    tenant_id: TenantId
+    name: str
+    slug: str
+    is_active: bool
+    created_at: datetime
+    plan_tier: str
+    subscription_status: str
+    user_count: int
+    assistant_count: int
+    tokens_today: int
+    tokens_30d: int
+    requests_30d: int
+    error_rate_30d: float
+    refusal_rate_30d: float
+
+
+@dataclass
+class PlatformUser:
+    """A row in a tenant's user list, as the Super Admin panel shows it —
+    identity and activity metadata only, never password or message content."""
+
+    user_id: UserId
+    email: str
+    role: str
+    is_active: bool
+    last_login_at: datetime | None
+    created_at: datetime
+
+
+@dataclass
+class TenantDetail:
+    overview: TenantOverview
+    users: list[PlatformUser]
+    usage_daily: list[UsageDay]
+
+
+@dataclass
+class UsageDay:
+    day: date
+    tokens_used: int
+
+
+@dataclass
+class PlatformHealthDay:
+    """One day of the cross-tenant health rollup — the same proxies as
+    `ChatbotDailyStat`, summed over every tenant/chatbot instead of one."""
+
+    day: date
+    answers: int
+    error_rate: float
+    refusal_rate: float
+    avg_latency_ms: float
+
+
+@runtime_checkable
+class PlatformAdminRepository(Protocol):
+    """Cross-tenant reads for the Super Admin panel, and the two status
+    toggles that back its "suspend" controls.
+
+    Every query here deliberately omits the `tenant_id` filter every other
+    repository in this file applies — that is what makes it cross-tenant. Kept
+    to counts, rates, and timestamps: no method here returns `chat_messages`
+    or `rag_request_logs.query`/`.answer` content.
+    """
+
+    async def tenants_overview(self) -> list[TenantOverview]: ...
+    async def tenant_detail(self, tenant_id: TenantId) -> TenantDetail | None: ...
+    async def platform_health(self, since: datetime) -> list[PlatformHealthDay]: ...
+    async def platform_provider_mix(self, since: datetime) -> list[ProviderStat]: ...
 
 
 @dataclass
@@ -1172,6 +1253,7 @@ class UnitOfWork(Protocol):
     availability: AvailabilityRepository
     appointments: AppointmentRepository
     reservations: ReservationRepository
+    platform_admin: PlatformAdminRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, *args: object) -> None: ...

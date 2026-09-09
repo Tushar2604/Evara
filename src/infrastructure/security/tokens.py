@@ -22,9 +22,17 @@ class JwtTokenService:
         # token gets.
         self._reset_ttl = timedelta(minutes=settings.password_reset_ttl_minutes)
 
-    def issue(self, *, user_id: str, tenant_id: str, role: str) -> TokenPair:
+    def issue(
+        self, *, user_id: str, tenant_id: str, role: str, is_platform_admin: bool = False
+    ) -> TokenPair:
         now = datetime.now(UTC)
-        base = {"sub": user_id, "tenant_id": tenant_id, "role": role, "iat": now}
+        base = {
+            "sub": user_id,
+            "tenant_id": tenant_id,
+            "role": role,
+            "is_platform_admin": is_platform_admin,
+            "iat": now,
+        }
         access = jwt.encode(
             {**base, "type": "access", "exp": now + self._access_ttl},
             self._secret,

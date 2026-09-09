@@ -53,6 +53,7 @@ from src.interfaces.api.routers import (
     locations,
     oauth,
     onboarding,
+    platform_admin,
     post_call,
     public,
     resources,
@@ -427,6 +428,7 @@ def create_app() -> FastAPI:
     app.include_router(onboarding.router, prefix=api_prefix)
     app.include_router(voices.router, prefix=api_prefix)
     app.include_router(whatsapp_web.router, prefix=api_prefix)
+    app.include_router(platform_admin.router, prefix=api_prefix)
     # Meta WhatsApp Cloud API. Registered after `whatsapp` so the more
     # specific /whatsapp/cloud/* paths are matched before that router's
     # generic ones.

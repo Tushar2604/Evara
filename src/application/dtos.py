@@ -25,6 +25,7 @@ class AuthOutput(BaseModel):
     tenant_id: uuid.UUID
     user_id: uuid.UUID
     role: str
+    is_platform_admin: bool = False
 
 
 class CreateUploadInput(BaseModel):

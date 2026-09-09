@@ -28,14 +28,26 @@ class FakeUsers:
     async def add(self, user: User) -> None:
         self.items.append(user)
 
+    async def touch_login(self, user_id, when) -> None:
+        pass
+
 
 class FakeTenants:
     def __init__(self, taken: set[str] | None = None) -> None:
         self.taken = set(taken or ())
         self.added: list[Tenant] = []
+        # Every tenant this fake is asked about is active unless a test puts
+        # its id here — that's the one knob `test_a_suspended_workspace_is_refused`
+        # (if such a test exists) would need.
+        self.suspended: set[TenantId] = set()
 
     async def get_by_slug(self, slug: str):
         return object() if slug in self.taken else None
+
+    async def get(self, tenant_id: TenantId):
+        return Tenant(
+            name="x", slug="x", id=tenant_id, is_active=tenant_id not in self.suspended
+        )
 
     async def add(self, tenant: Tenant) -> None:
         self.taken.add(tenant.slug)
@@ -79,7 +91,7 @@ class FakeUow:
 
 
 class FakeTokens:
-    def issue(self, *, user_id: str, tenant_id: str, role: str):
+    def issue(self, *, user_id: str, tenant_id: str, role: str, is_platform_admin: bool = False):
         from src.application.ports.services import TokenPair
 
         return TokenPair(access_token=f"acc-{user_id}", refresh_token=f"ref-{user_id}")

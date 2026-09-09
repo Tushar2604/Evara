@@ -29,7 +29,7 @@ import {
   ListChecks, LayoutDashboard, PhoneOutgoing, MessageCircle, UserSearch,
   CalendarDays, CalendarCheck, Briefcase, MapPin, Clock,
   PanelLeftDashed, PanelLeftClose, PanelLeftOpen,
-  ChevronDown, Lock, Eye, CreditCard, KeyRound,
+  ChevronDown, Lock, Eye, CreditCard, KeyRound, ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "../store/auth";
 import { useTheme } from "../store/theme";
@@ -48,6 +48,8 @@ interface NavItem {
   exact?: boolean;
   /** Only shown to Owner/Admin roles — the "admin panel" surfaces. */
   adminOnly?: boolean;
+  /** Only shown to platform admins — cross-tenant, independent of `role`. */
+  superAdminOnly?: boolean;
   /** A fixed word, like "New" on a feature that just shipped. */
   badge?: string;
   /** A live count, resolved at render from `useNotifications`. Separate from
@@ -186,6 +188,15 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/report-issue", label: "Report Issue", icon: LifeBuoy },
     ],
   },
+  {
+    // Platform-wide, not tenant-scoped — invisible to everyone but the
+    // handful of accounts that hold `is_platform_admin`. Never gated by
+    // stage: the site owner needs it from day one.
+    title: "Platform",
+    items: [
+      { to: "/platform-admin", label: "Super Admin", icon: ShieldAlert, superAdminOnly: true },
+    ],
+  },
 ];
 
 /** Is this row in the rail yet? `full` is the permanent escape hatch behind
@@ -200,8 +211,10 @@ function isUnlocked(item: NavItem, stage: Stage, navMode: NavMode): boolean {
  * want gets there, and a staged rail must never become a locked door. A page
  * reached this way renders normally — it just tends to be empty, which is its
  * own honest answer. */
-function searchTargets(isAdmin: boolean): NavItem[] {
-  return NAV_GROUPS.flatMap((g) => g.items).filter((i) => !i.adminOnly || isAdmin);
+function searchTargets(isAdmin: boolean, isPlatformAdmin: boolean): NavItem[] {
+  return NAV_GROUPS.flatMap((g) => g.items).filter(
+    (i) => (!i.adminOnly || isAdmin) && (!i.superAdminOnly || isPlatformAdmin),
+  );
 }
 
 function ThemeToggle() {
@@ -223,7 +236,7 @@ function ThemeToggle() {
 
 /** Jump-to search. Filters the nav; Enter opens the top hit. */
 function CommandSearch() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isPlatformAdmin } = useAuth();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -246,7 +259,7 @@ function CommandSearch() {
 
   const q = query.trim().toLowerCase();
   const hits = q
-    ? searchTargets(isAdmin).filter((i) => i.label.toLowerCase().includes(q)).slice(0, 6)
+    ? searchTargets(isAdmin, isPlatformAdmin).filter((i) => i.label.toLowerCase().includes(q)).slice(0, 6)
     : [];
 
   function go(to: string) {
@@ -358,7 +371,7 @@ export default function Layout() {
 }
 
 function AppShell() {
-  const { logout, tenantId, isAdmin, email } = useAuth();
+  const { logout, tenantId, isAdmin, isPlatformAdmin, email } = useAuth();
   const { newAppointments } = useNotifications();
   const { stage, navMode, setNavMode, loaded: stageKnown } = useOnboarding();
   const counters = { newAppointments };
@@ -407,7 +420,10 @@ function AppShell() {
   // in the groups' own order — so the disclosure reads as "the rest of the
   // product, in the order you'll meet it" rather than an arbitrary pile.
   const lockedItems = NAV_GROUPS.flatMap((g) => g.items).filter(
-    (i) => (!i.adminOnly || isAdmin) && !isUnlocked(i, stage, gate),
+    (i) =>
+      (!i.adminOnly || isAdmin) &&
+      (!i.superAdminOnly || isPlatformAdmin) &&
+      !isUnlocked(i, stage, gate),
   );
 
   function cycleMode() {
@@ -486,7 +502,9 @@ function AppShell() {
         {/* Groups */}
         <div className="relative flex-1 px-3 pb-2 overflow-y-auto">
           {NAV_GROUPS.map((group) => {
-            const visible = group.items.filter((i) => !i.adminOnly || isAdmin);
+            const visible = group.items.filter(
+              (i) => (!i.adminOnly || isAdmin) && (!i.superAdminOnly || isPlatformAdmin),
+            );
             // A group whose every row is still locked disappears entirely —
             // an empty heading is worse than no heading. Its rows are not
             // lost; they are in the disclosure below.

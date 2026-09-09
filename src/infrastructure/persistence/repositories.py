@@ -8,7 +8,7 @@ cosine distance computed inside Postgres — no separate vector service.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -19,9 +19,14 @@ from src.application.ports.repositories import (
     GoogleOAuthConnection,
     InboxStats,
     OAuthConnection,
+    PlatformHealthDay,
+    PlatformUser,
     ProviderStat,
     RequestLog,
+    TenantDetail,
     TenantInvite,
+    TenantOverview,
+    UsageDay,
     WhatsAppChannel,
     WhatsAppConversation,
     WhatsAppConversationNote,
@@ -93,6 +98,11 @@ class TenantRepositoryImpl:
             .values(daily_token_quota=daily_token_quota, max_documents=max_documents)
         )
 
+    async def set_active(self, tenant_id: TenantId, is_active: bool) -> None:
+        await self._s.execute(
+            update(m.TenantModel).where(m.TenantModel.id == tenant_id).values(is_active=is_active)
+        )
+
 
 class UserRepositoryImpl:
     def __init__(self, session: AsyncSession) -> None:
@@ -107,6 +117,8 @@ class UserRepositoryImpl:
                 password_hash=user.password_hash,
                 role=user.role.value,
                 is_active=user.is_active,
+                is_platform_admin=user.is_platform_admin,
+                last_login_at=user.last_login_at,
                 created_at=user.created_at,
             )
         )
@@ -114,6 +126,23 @@ class UserRepositoryImpl:
     async def get(self, user_id: UserId) -> User | None:
         row = await self._s.get(m.UserModel, user_id)
         return map_.user_to_domain(row) if row else None
+
+    async def touch_login(self, user_id: UserId, when: datetime) -> None:
+        await self._s.execute(
+            update(m.UserModel).where(m.UserModel.id == user_id).values(last_login_at=when)
+        )
+
+    async def set_active(self, user_id: UserId, is_active: bool) -> None:
+        await self._s.execute(
+            update(m.UserModel).where(m.UserModel.id == user_id).values(is_active=is_active)
+        )
+
+    async def set_platform_admin(self, user_id: UserId, is_platform_admin: bool) -> None:
+        await self._s.execute(
+            update(m.UserModel)
+            .where(m.UserModel.id == user_id)
+            .values(is_platform_admin=is_platform_admin)
+        )
 
     async def set_password_hash(self, user_id: UserId, password_hash: str) -> None:
         """Narrower than a general `update` on purpose: a password reset should
@@ -1118,6 +1147,173 @@ class RequestLogRepositoryImpl:
             )
         ).scalars()
         return [_request_log_to_domain(r) for r in rows]
+
+
+def _tenant_overview_row(r) -> TenantOverview:  # noqa: ANN001 - SQLAlchemy Row
+    return TenantOverview(
+        tenant_id=TenantId(r.id),
+        name=r.name,
+        slug=r.slug,
+        is_active=r.is_active,
+        created_at=r.created_at,
+        plan_tier=r.plan_tier,
+        subscription_status=r.subscription_status,
+        user_count=r.user_count,
+        assistant_count=r.assistant_count,
+        tokens_today=r.tokens_today,
+        tokens_30d=r.tokens_30d,
+        requests_30d=r.requests_30d,
+        error_rate_30d=r.error_rate_30d or 0.0,
+        refusal_rate_30d=r.refusal_rate_30d or 0.0,
+    )
+
+
+_TENANT_OVERVIEW_SQL = """
+    SELECT
+        t.id, t.name, t.slug, t.is_active, t.created_at,
+        COALESCE(s.tier, 'free')      AS plan_tier,
+        COALESCE(s.status, 'active')  AS subscription_status,
+        (SELECT count(*) FROM users u WHERE u.tenant_id = t.id)    AS user_count,
+        (SELECT count(*) FROM chatbots c WHERE c.tenant_id = t.id) AS assistant_count,
+        COALESCE(
+            (SELECT uc.tokens_used FROM usage_counters uc
+             WHERE uc.tenant_id = t.id AND uc.day = CURRENT_DATE), 0
+        ) AS tokens_today,
+        COALESCE(
+            (SELECT sum(uc.tokens_used) FROM usage_counters uc
+             WHERE uc.tenant_id = t.id AND uc.day >= :since_date), 0
+        ) AS tokens_30d,
+        COALESCE(
+            (SELECT count(*) FROM rag_request_logs r
+             WHERE r.tenant_id = t.id AND r.created_at >= :since), 0
+        ) AS requests_30d,
+        (SELECT avg((r.status <> 'ok')::int)::float FROM rag_request_logs r
+         WHERE r.tenant_id = t.id AND r.created_at >= :since) AS error_rate_30d,
+        (SELECT avg(r.refused::int)::float FROM rag_request_logs r
+         WHERE r.tenant_id = t.id AND r.created_at >= :since) AS refusal_rate_30d
+    FROM tenants t
+    LEFT JOIN subscriptions s ON s.tenant_id = t.id
+    {where}
+    ORDER BY t.created_at DESC
+"""
+
+
+class PlatformAdminRepositoryImpl:
+    """Cross-tenant reads for the Super Admin panel. Every query here omits the
+    `tenant_id` filter every other repository applies — see the port's
+    docstring for why that is deliberate and what it is still scoped away from
+    (message content, never returned by anything in this class)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def tenants_overview(self) -> list[TenantOverview]:
+        now = datetime.now(UTC)
+        since = now - timedelta(days=30)
+        rows = await self._s.execute(
+            text(_TENANT_OVERVIEW_SQL.format(where="")),
+            {"since": since, "since_date": since.date()},
+        )
+        return [_tenant_overview_row(r) for r in rows]
+
+    async def tenant_detail(self, tenant_id: TenantId) -> TenantDetail | None:
+        now = datetime.now(UTC)
+        since = now - timedelta(days=30)
+        row = (
+            await self._s.execute(
+                text(_TENANT_OVERVIEW_SQL.format(where="WHERE t.id = :tid")),
+                {"since": since, "since_date": since.date(), "tid": tenant_id},
+            )
+        ).first()
+        if row is None:
+            return None
+
+        user_rows = await self._s.execute(
+            select(m.UserModel)
+            .where(m.UserModel.tenant_id == tenant_id)
+            .order_by(m.UserModel.created_at.asc())
+        )
+        users = [
+            PlatformUser(
+                user_id=UserId(u.id),
+                email=u.email,
+                role=u.role,
+                is_active=u.is_active,
+                last_login_at=u.last_login_at,
+                created_at=u.created_at,
+            )
+            for u in user_rows.scalars()
+        ]
+
+        usage_rows = await self._s.execute(
+            select(m.UsageCounterModel)
+            .where(
+                m.UsageCounterModel.tenant_id == tenant_id,
+                m.UsageCounterModel.day >= since.date(),
+            )
+            .order_by(m.UsageCounterModel.day.asc())
+        )
+        usage_daily = [
+            UsageDay(day=u.day, tokens_used=u.tokens_used) for u in usage_rows.scalars()
+        ]
+
+        return TenantDetail(
+            overview=_tenant_overview_row(row), users=users, usage_daily=usage_daily
+        )
+
+    async def platform_health(self, since: datetime) -> list[PlatformHealthDay]:
+        rows = await self._s.execute(
+            text(
+                """
+                SELECT date_trunc('day', created_at)::date AS day,
+                       count(*)                              AS answers,
+                       avg((status <> 'ok')::int)::float      AS error_rate,
+                       avg(refused::int)::float               AS refusal_rate,
+                       avg(latency_ms)::float                 AS avg_latency_ms
+                FROM rag_request_logs
+                WHERE created_at >= :since
+                GROUP BY 1
+                ORDER BY 1
+                """
+            ),
+            {"since": since},
+        )
+        return [
+            PlatformHealthDay(
+                day=r.day,
+                answers=r.answers,
+                error_rate=r.error_rate or 0.0,
+                refusal_rate=r.refusal_rate or 0.0,
+                avg_latency_ms=r.avg_latency_ms or 0.0,
+            )
+            for r in rows
+        ]
+
+    async def platform_provider_mix(self, since: datetime) -> list[ProviderStat]:
+        rows = await self._s.execute(
+            text(
+                """
+                SELECT provider,
+                       count(*)                    AS answers,
+                       avg(max_score)::float        AS avg_top_score,
+                       avg(tokens_used)::float       AS avg_tokens
+                FROM rag_request_logs
+                WHERE created_at >= :since
+                GROUP BY provider
+                ORDER BY answers DESC
+                """
+            ),
+            {"since": since},
+        )
+        return [
+            ProviderStat(
+                provider=r.provider,
+                answers=r.answers,
+                avg_top_score=r.avg_top_score,
+                avg_tokens=r.avg_tokens or 0.0,
+            )
+            for r in rows
+        ]
 
 
 class InterviewRepositoryImpl:

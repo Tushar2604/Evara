@@ -76,6 +76,8 @@ def user_to_domain(row: m.UserModel) -> User:
         tenant_id=TenantId(row.tenant_id),
         role=Role(row.role),
         is_active=row.is_active,
+        is_platform_admin=row.is_platform_admin,
+        last_login_at=row.last_login_at,
         created_at=row.created_at,
     )
 

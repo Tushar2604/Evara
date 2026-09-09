@@ -14,6 +14,7 @@ account claiming an address could take over the existing account on it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from src.application.dtos import AuthOutput
 from src.application.ports.repositories import UnitOfWork
@@ -69,7 +70,14 @@ class GoogleSignIn:
             if user is not None:
                 if not user.is_active:
                     raise PermissionDeniedError("This account has been deactivated.")
+                tenant = await uow.tenants.get(user.tenant_id)
+                if tenant is None or not tenant.is_active:
+                    raise PermissionDeniedError(
+                        "This workspace has been suspended. Contact support for help."
+                    )
                 tenant_id, user_id, role = user.tenant_id, user.id, user.role.value
+                is_platform_admin = user.is_platform_admin
+                await uow.users.touch_login(user.id, datetime.now(UTC))
             else:
                 # New person: give them a workspace. `password_hash=""` marks the
                 # account as SSO-only — `AuthenticateUser` refuses to verify a
@@ -83,11 +91,15 @@ class GoogleSignIn:
                     slug=await unique_slug(uow, name),
                 )
                 tenant_id, user_id, role = tenant.id, created.id, created.role.value
+                is_platform_admin = False
 
             await uow.commit()
 
         pair = self._tokens.issue(
-            user_id=str(user_id), tenant_id=str(tenant_id), role=role
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
+            role=role,
+            is_platform_admin=is_platform_admin,
         )
         return AuthOutput(
             access_token=pair.access_token,
@@ -95,4 +107,5 @@ class GoogleSignIn:
             tenant_id=tenant_id,
             user_id=user_id,
             role=role,
+            is_platform_admin=is_platform_admin,
         )

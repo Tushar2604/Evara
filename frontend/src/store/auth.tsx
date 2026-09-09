@@ -17,6 +17,9 @@ interface AuthState {
   /** Captured at sign-in for the avatar tooltip — the token response does
    * not carry it, and null is fine (the UI falls back to the tenant id). */
   email: string | null;
+  /** Platform-wide, independent of `role` (which is tenant-scoped) — gates
+   * the Super Admin panel. */
+  isPlatformAdmin: boolean;
 }
 
 interface AuthContextValue extends AuthState {
@@ -39,6 +42,7 @@ function saveTokens(resp: TokenResponse, email?: string) {
   localStorage.setItem("tenant_id", resp.tenant_id);
   localStorage.setItem("user_id", resp.user_id);
   localStorage.setItem("role", resp.role);
+  localStorage.setItem("is_platform_admin", resp.is_platform_admin ? "1" : "0");
 }
 
 function clearTokens() {
@@ -48,6 +52,7 @@ function clearTokens() {
   localStorage.removeItem("user_id");
   localStorage.removeItem("role");
   localStorage.removeItem("email");
+  localStorage.removeItem("is_platform_admin");
 }
 
 function readState(): AuthState {
@@ -57,6 +62,7 @@ function readState(): AuthState {
     userId: localStorage.getItem("user_id"),
     role: localStorage.getItem("role"),
     email: localStorage.getItem("email"),
+    isPlatformAdmin: localStorage.getItem("is_platform_admin") === "1",
   };
 }
 
@@ -67,6 +73,7 @@ function stateFromResponse(resp: TokenResponse, email?: string): AuthState {
     userId: resp.user_id,
     role: resp.role,
     email: email ?? localStorage.getItem("email"),
+    isPlatformAdmin: !!resp.is_platform_admin,
   };
 }
 
@@ -92,7 +99,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     clearTokens();
-    setState({ accessToken: null, tenantId: null, userId: null, role: null, email: null });
+    setState({
+      accessToken: null,
+      tenantId: null,
+      userId: null,
+      role: null,
+      email: null,
+      isPlatformAdmin: false,
+    });
   }, []);
 
   return (

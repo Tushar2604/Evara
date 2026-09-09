@@ -7,6 +7,7 @@ export interface TokenResponse {
   tenant_id: string;
   user_id: string;
   role: string;
+  is_platform_admin?: boolean;
 }
 
 export function register(

@@ -36,6 +36,9 @@ class FakeUsers:
     async def add(self, user: User) -> None:
         self.items.append(user)
 
+    async def touch_login(self, user_id, when) -> None:
+        pass
+
 
 class FakeTenants:
     def __init__(self) -> None:
@@ -43,6 +46,11 @@ class FakeTenants:
 
     async def get_by_slug(self, slug: str):
         return next((t for t in self.added if t.slug == slug), None)
+
+    async def get(self, tenant_id: TenantId):
+        return next((t for t in self.added if t.id == tenant_id), None) or Tenant(
+            name="x", slug="x", id=tenant_id, is_active=True
+        )
 
     async def add(self, tenant: Tenant) -> None:
         self.added.append(tenant)

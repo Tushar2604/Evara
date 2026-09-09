@@ -43,6 +43,9 @@ class Principal:
     plan_tier: str | None = None
     scopes: frozenset[ApiScope] = field(default_factory=frozenset)
     api_key_id: uuid.UUID | None = None
+    # Platform-wide, orthogonal to `role` (which is tenant-scoped). Never true
+    # for an API key — see `_principal_from_api_key`.
+    is_platform_admin: bool = False
 
     def has_scope(self, scope: ApiScope) -> bool:
         return self.auth != "api_key" or scope in self.scopes
@@ -72,6 +75,7 @@ async def current_principal(
             tenant_id=TenantId(uuid.UUID(claims["tenant_id"])),
             user_id=UserId(uuid.UUID(claims["sub"])),
             role=claims.get("role", "member"),
+            is_platform_admin=bool(claims.get("is_platform_admin", False)),
         )
 
     if x_api_key:
@@ -159,6 +163,17 @@ async def require_admin(principal: PrincipalDep) -> Principal:
 
 
 AdminPrincipalDep = Annotated[Principal, Depends(require_admin)]
+
+
+async def require_platform_admin(principal: PrincipalDep) -> Principal:
+    """Gate for the cross-tenant Super Admin panel. Independent of `role` —
+    a platform admin may hold any (or no) tenant role in their own workspace."""
+    if not principal.is_platform_admin:
+        raise HTTPException(status_code=403, detail="Platform admin access required.")
+    return principal
+
+
+PlatformAdminPrincipalDep = Annotated[Principal, Depends(require_platform_admin)]
 
 
 def require_scope(

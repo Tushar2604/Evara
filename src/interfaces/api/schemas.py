@@ -42,6 +42,70 @@ class TokenResponse(BaseModel):
     tenant_id: uuid.UUID
     user_id: uuid.UUID
     role: str
+    is_platform_admin: bool = False
+
+
+# --- Platform Admin (Super Admin panel: cross-tenant, metadata only) ---
+class TenantOverviewResponse(BaseModel):
+    tenant_id: uuid.UUID
+    name: str
+    slug: str
+    is_active: bool
+    created_at: datetime
+    plan_tier: str
+    subscription_status: str
+    user_count: int
+    assistant_count: int
+    tokens_today: int
+    tokens_30d: int
+    requests_30d: int
+    error_rate_30d: float
+    refusal_rate_30d: float
+
+
+class PlatformUserResponse(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    role: str
+    is_active: bool
+    last_login_at: datetime | None
+    created_at: datetime
+
+
+class UsageDayResponse(BaseModel):
+    day: date
+    tokens_used: int
+
+
+class TenantDetailResponse(BaseModel):
+    overview: TenantOverviewResponse
+    users: list[PlatformUserResponse]
+    usage_daily: list[UsageDayResponse]
+
+
+class PlatformHealthDayResponse(BaseModel):
+    day: date
+    answers: int
+    error_rate: float
+    refusal_rate: float
+    avg_latency_ms: float
+
+
+class PlatformProviderStatResponse(BaseModel):
+    provider: str | None
+    answers: int
+    avg_top_score: float | None
+    avg_tokens: float
+
+
+class PlatformHealthResponse(BaseModel):
+    days: int
+    daily: list[PlatformHealthDayResponse]
+    providers: list[PlatformProviderStatResponse]
+
+
+class SetStatusRequest(BaseModel):
+    is_active: bool
 
 
 # --- Team (per-tenant admin panel: roles + teammate invites) ---

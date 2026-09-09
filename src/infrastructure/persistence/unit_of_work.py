@@ -36,6 +36,7 @@ from src.infrastructure.persistence.repositories import (
     IssueReportRepositoryImpl,
     OAuthConnectionRepositoryImpl,
     OnboardingRepositoryImpl,
+    PlatformAdminRepositoryImpl,
     PostCallConfigRepositoryImpl,
     PostCallDeliveryRepositoryImpl,
     RequestLogRepositoryImpl,
@@ -151,6 +152,7 @@ class SqlAlchemyUnitOfWork:
         self.availability = AvailabilityRepositoryImpl(s)
         self.appointments = AppointmentRepositoryImpl(s)
         self.reservations = ReservationRepositoryImpl(s)
+        self.platform_admin = PlatformAdminRepositoryImpl(s)
 
     async def _bind_scope(self) -> None:
         if self._session is None or self._tenant_id is None:

@@ -124,6 +124,7 @@ async def callback(
                 "tenant_id": str(result.tenant_id),
                 "user_id": str(result.user_id),
                 "role": result.role,
+                "is_platform_admin": result.is_platform_admin,
             },
             "email": profile.email,
         },

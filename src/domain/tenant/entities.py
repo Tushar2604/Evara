@@ -43,6 +43,9 @@ class User:
     role: Role = Role.OWNER
     id: UserId = field(default_factory=lambda: UserId(new_id()))
     is_active: bool = True
+    # Platform-wide, not tenant-scoped — see migration 0036.
+    is_platform_admin: bool = False
+    last_login_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def can_manage(self) -> bool:

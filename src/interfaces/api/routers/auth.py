@@ -62,6 +62,7 @@ async def register(body: RegisterRequest, container: ContainerDep) -> TokenRespo
         tenant_id=result.tenant_id,
         user_id=result.user_id,
         role=result.role,
+        is_platform_admin=result.is_platform_admin,
     )
 
 
@@ -75,6 +76,7 @@ async def login(body: LoginRequest, container: ContainerDep) -> TokenResponse:
         tenant_id=result.tenant_id,
         user_id=result.user_id,
         role=result.role,
+        is_platform_admin=result.is_platform_admin,
     )
 
 
@@ -146,7 +148,10 @@ async def reset_password(body: ResetPasswordRequest, container: ContainerDep) ->
 
     log.info("auth.password_reset.completed", user_id=str(user.id))
     pair = container.tokens.issue(
-        user_id=str(user.id), tenant_id=str(user.tenant_id), role=user.role.value
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role.value,
+        is_platform_admin=user.is_platform_admin,
     )
     return TokenResponse(
         access_token=pair.access_token,
@@ -154,4 +159,5 @@ async def reset_password(body: ResetPasswordRequest, container: ContainerDep) ->
         tenant_id=str(user.tenant_id),
         user_id=str(user.id),
         role=user.role.value,
+        is_platform_admin=user.is_platform_admin,
     )

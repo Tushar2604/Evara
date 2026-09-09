@@ -79,7 +79,9 @@ class TokenPair:
 
 @runtime_checkable
 class TokenService(Protocol):
-    def issue(self, *, user_id: str, tenant_id: str, role: str) -> TokenPair: ...
+    def issue(
+        self, *, user_id: str, tenant_id: str, role: str, is_platform_admin: bool = False
+    ) -> TokenPair: ...
     def decode(self, token: str) -> dict: ...
 
 
